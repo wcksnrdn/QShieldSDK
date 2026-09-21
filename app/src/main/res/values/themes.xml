@@ -1,0 +1,4 @@
+<resources>
+
+    <style name="Theme.QShield" parent="Theme.MaterialComponents.Light" />
+</resources>

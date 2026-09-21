@@ -1,0 +1,28 @@
+# Android / Gradle
+*.iml
+.gradle/
+local.properties
+.idea/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+output.json
+
+# Kunci penandatanganan — tidak boleh masuk repo
+*.jks
+*.keystore
+keystore.properties
+
+# macOS
+.DS_Store
+
+# Sertifikat server disalin otomatis oleh
+# scripts/make_android_prompt.py di repo Q-Shield, dan berubah tiap
+# kali alamat laptop berubah. Menyimpannya di sini hanya menciptakan
+# konflik tanpa guna.
+app/src/main/res/raw/qshield_ca.pem
