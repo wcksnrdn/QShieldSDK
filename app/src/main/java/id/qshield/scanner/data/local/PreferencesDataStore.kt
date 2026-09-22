@@ -18,6 +18,24 @@ class PreferencesDataStore(private val context: Context) {
         val KEY_UUID = stringPreferencesKey("uuid")
         val KEY_BASE_URL = stringPreferencesKey("base_url")
         val KEY_API_KEY = stringPreferencesKey("api_key")
+
+        /**
+         * Server produksi. Dipakai kalau pengguna belum menyetel apa pun.
+         *
+         * Sebelumnya bawaannya kosong, dan permintaan jatuh ke
+         * "http://localhost/" milik Retrofit — yang di HP berarti HP itu
+         * sendiri. Aplikasi yang baru dipasang gagal tanpa alasan yang
+         * bisa ditebak pemakainya, dan tiap anggota tim harus mengetik
+         * alamat yang benar lebih dulu.
+         *
+         * Alamat ini punya sertifikat Let's Encrypt sungguhan, jadi tidak
+         * ada lagi peringatan sertifikat dan tidak perlu satu WiFi dengan
+         * laptop siapa pun.
+         *
+         * Setelan tetap bisa diubah di dialog — itu yang dipakai saat
+         * menguji server lokal.
+         */
+        const val BASE_URL_BAWAAN = "https://qshield.fly.dev"
     }
 
     val uuidFlow: Flow<String> = context.dataStore.data.map { preferences ->
@@ -25,7 +43,9 @@ class PreferencesDataStore(private val context: Context) {
     }
 
     val baseUrlFlow: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[KEY_BASE_URL] ?: ""
+        // Kosong DAN belum pernah diisi sama-sama jatuh ke bawaan; pengguna
+        // yang sengaja mengosongkannya berarti ingin kembali ke bawaan.
+        preferences[KEY_BASE_URL]?.takeIf { it.isNotBlank() } ?: BASE_URL_BAWAAN
     }
 
     val apiKeyFlow: Flow<String> = context.dataStore.data.map { preferences ->
