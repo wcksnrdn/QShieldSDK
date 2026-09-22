@@ -1,6 +1,8 @@
 package id.qshield.scanner.data
 
 import id.qshield.scanner.data.models.AmbientWifi
+import id.qshield.scanner.data.models.InspectRequest
+import id.qshield.scanner.data.models.InspectResponse
 import id.qshield.scanner.data.models.DeviceIntegrity
 import id.qshield.scanner.data.models.PrintedLabel
 import id.qshield.scanner.data.models.QrisVerificationRequest
@@ -17,6 +19,21 @@ class ScannerRepository(
         val response: QrisVerificationResponse,
         val wifiNotice: String?
     )
+
+    /**
+     * Katalogkan satu payload. Tidak mengambil lokasi, tidak mengambil
+     * WiFi, tidak melaporkan integritas — tidak ada satu pun dari itu
+     * yang relevan untuk pertanyaan "payload ini isinya apa".
+     */
+    suspend fun inspectQris(payload: String): Result<InspectResponse> {
+        return try {
+            Result.success(apiService.inspect(InspectRequest(payload = payload)))
+        } catch (e: HttpException) {
+            Result.failure(Exception(ApiErrorMapper.mapHttpError(e.code()), e))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     suspend fun verifyQris(
         payload: String,

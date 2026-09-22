@@ -33,6 +33,32 @@ data class PrintedLabel(
     val merchant_name: String? = null
 )
 
+/**
+ * Permintaan ke /api/v1/inspect — TANPA koordinat, dan itu inti bedanya.
+ *
+ * Dipakai saat mengkatalogkan QRIS, misalnya memotret stiker dari
+ * internet untuk memperkaya korpus penerbit. Mengirimkannya ke /verify
+ * membuat tempat pemindainya tampak seperti jangkar yang berkali-kali
+ * diserang, dan pedagang sungguhan di sekitarnya ikut tertuduh.
+ */
+@Serializable
+data class InspectRequest(
+    val payload: String,
+    val include_tlv: Boolean = false
+)
+
+/**
+ * Hasil /inspect. TIDAK ada action, verdict, maupun tiket: tanpa lokasi
+ * tidak ada putusan lokasi yang bisa diberikan.
+ */
+@Serializable
+data class InspectResponse(
+    val merchant: Merchant? = null,
+    val structural_signals: List<String> = emptyList(),
+    val structural_reasons: List<String> = emptyList(),
+    val processing_ms: Double = 0.0
+)
+
 @Serializable
 data class QrisVerificationResponse(
     val verdict: String,

@@ -9,6 +9,7 @@ import id.qshield.scanner.data.LocationService
 import id.qshield.scanner.data.ScannerRepository
 import id.qshield.scanner.data.WifiService
 import id.qshield.scanner.data.local.PreferencesDataStore
+import id.qshield.scanner.data.models.InspectResponse
 import id.qshield.scanner.data.models.QrisVerificationResponse
 import id.qshield.scanner.data.network.ApiClient
 import id.qshield.scanner.data.network.QShieldApiService
@@ -26,6 +27,9 @@ sealed class ScannerUiState {
         val currentPayload: String
     ) : ScannerUiState()
     
+    /** Hasil katalog — tidak ada putusan lokasi, karena tidak ada lokasi. */
+    data class Katalog(val response: InspectResponse) : ScannerUiState()
+
     data class Error(val message: String) : ScannerUiState()
 }
 
@@ -49,10 +53,34 @@ class ScannerViewModel(
     // getOrGenerateUuid() atomik lewat DataStore.edit, jadi dua pemindaian
     // yang berbarengan tidak bisa menghasilkan dua pengenal berbeda.
 
+    /**
+     * Mode katalog. Saat menyala, pemindaian dikirim ke /inspect —
+     * membaca isi payload tanpa menyentuh pengetahuan lokasi.
+     *
+     * Ada karena mengkatalogkan QRIS lewat /verify menandai jangkar di
+     * sekitar pemindai sebagai berkali-kali diserang, dan pedagang
+     * sungguhan di sekitarnya ikut tertuduh.
+     */
+    private val _modeKatalog = MutableStateFlow(false)
+    val modeKatalog: StateFlow<Boolean> = _modeKatalog.asStateFlow()
+
+    fun setModeKatalog(aktif: Boolean) { _modeKatalog.value = aktif }
+
     fun onQrCodeScanned(payload: String) {
         // Prevent multiple scans
         if (_uiState.value !is ScannerUiState.Scanning) return
-        verify(payload, null)
+        if (_modeKatalog.value) katalogkan(payload) else verify(payload, null)
+    }
+
+    private fun katalogkan(payload: String) {
+        viewModelScope.launch {
+            repository.inspectQris(payload)
+                .onSuccess { _uiState.value = ScannerUiState.Katalog(it) }
+                .onFailure {
+                    _uiState.value = ScannerUiState.Error(
+                        it.message ?: "Terjadi kesalahan")
+                }
+        }
     }
     
     fun onVerifyPrintedLabel(payload: String, printedNmid: String) {

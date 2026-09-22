@@ -39,6 +39,7 @@ fun ScannerScreen(
     }
 
     val uiState by viewModel.uiState.collectAsState()
+    val modeKatalog by viewModel.modeKatalog.collectAsState()
 
     Scaffold(
         topBar = {
@@ -46,6 +47,18 @@ fun ScannerScreen(
             TopAppBar(
                 title = { Text("QShield Scanner") },
                 actions = {
+                    // Sakelar mode katalog ditaruh di sini, bukan di dalam
+                    // dialog setelan: ia dinyalakan dan dimatikan berkali-kali
+                    // dalam satu sesi lapangan, dan pemakainya harus selalu
+                    // bisa MELIHAT sedang di mode mana sebelum memindai.
+                    Text(
+                        text = if (modeKatalog) "Katalog" else "Verifikasi",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Switch(
+                        checked = modeKatalog,
+                        onCheckedChange = { viewModel.setModeKatalog(it) }
+                    )
                     IconButton(onClick = { showSettings = true }) {
                         Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -77,6 +90,12 @@ fun ScannerScreen(
                         onVerifyPrintedLabel = { payload, nmid ->
                             viewModel.onVerifyPrintedLabel(payload, nmid)
                         },
+                        onRestart = { viewModel.restartScanning() }
+                    )
+                }
+                is ScannerUiState.Katalog -> {
+                    KatalogScreen(
+                        hasil = state.response,
                         onRestart = { viewModel.restartScanning() }
                     )
                 }
