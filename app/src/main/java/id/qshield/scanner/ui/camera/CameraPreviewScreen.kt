@@ -139,7 +139,7 @@ fun CameraPreviewScreen(
             color = Color.White,
             modifier = Modifier
                 .align(Alignment.Center)
-                .padding(top = 280.dp) // Below the square
+                .padding(top = 340.dp) // Below the square
         )
     }
 }

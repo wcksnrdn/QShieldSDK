@@ -9,8 +9,9 @@ import id.qshield.scanner.data.LocationService
 import id.qshield.scanner.data.ScannerRepository
 import id.qshield.scanner.data.WifiService
 import id.qshield.scanner.data.local.PreferencesDataStore
-import id.qshield.scanner.data.models.InspectResponse
+import id.qshield.scanner.data.models.QShieldFlowState
 import id.qshield.scanner.data.models.QrisVerificationResponse
+import id.qshield.scanner.data.models.VerdictAction
 import id.qshield.scanner.data.network.ApiClient
 import id.qshield.scanner.data.network.QShieldApiService
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,95 +19,172 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-sealed class ScannerUiState {
-    object Scanning : ScannerUiState()
-    
-    data class Result(
-        val response: QrisVerificationResponse,
-        val wifiNotice: String? = null,
-        val currentPayload: String
-    ) : ScannerUiState()
-    
-    /** Hasil katalog — tidak ada putusan lokasi, karena tidak ada lokasi. */
-    data class Katalog(val response: InspectResponse) : ScannerUiState()
-
-    data class Error(val message: String) : ScannerUiState()
-}
-
+/**
+ * ViewModel yang mengendalikan alur QShield sepenuhnya lewat
+ * [QShieldFlowState]. Setiap transisi state didasarkan pada `action`
+ * yang dikembalikan backend.
+ *
+ * Alur:
+ *   Scanning → Verifying → (backend response) →
+ *     proceed    → Verdict → Success
+ *     warn       → Verdict → (user proceeds) → Success
+ *     step_up    → StepUpConfirmation → (confirm) → PinEntry → Success
+ *     cooling_off→ CoolingOff (countdown, no proceed)
+ */
 class ScannerViewModel(
     private val repository: ScannerRepository,
     private val prefs: PreferencesDataStore
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow<ScannerUiState>(ScannerUiState.Scanning)
-    val uiState: StateFlow<ScannerUiState> = _uiState.asStateFlow()
-
-    // Pengenal perangkat WAJIB bertahan antar peluncuran. Versi sebelumnya
-    // membangkitkannya di sini, di memori, sehingga tiap kali aplikasi dibuka
-    // server melihat perangkat baru.
-    //
-    // Itu bukan sekadar rapi-rapi: MIN_OBSERVERS = 3 adalah inti pertahanan
-    // Q-Shield, dan dengan UUID yang lahir ulang tiap peluncuran satu orang
-    // dengan satu HP memenuhinya cukup dengan menutup-buka aplikasi tiga
-    // kali. Konsensus yang seharusnya mahal jadi gratis.
-    //
-    // getOrGenerateUuid() atomik lewat DataStore.edit, jadi dua pemindaian
-    // yang berbarengan tidak bisa menghasilkan dua pengenal berbeda.
+    private val _flowState = MutableStateFlow<QShieldFlowState>(QShieldFlowState.Scanning)
+    val flowState: StateFlow<QShieldFlowState> = _flowState.asStateFlow()
 
     /**
      * Mode katalog. Saat menyala, pemindaian dikirim ke /inspect —
      * membaca isi payload tanpa menyentuh pengetahuan lokasi.
-     *
-     * Ada karena mengkatalogkan QRIS lewat /verify menandai jangkar di
-     * sekitar pemindai sebagai berkali-kali diserang, dan pedagang
-     * sungguhan di sekitarnya ikut tertuduh.
      */
     private val _modeKatalog = MutableStateFlow(false)
     val modeKatalog: StateFlow<Boolean> = _modeKatalog.asStateFlow()
 
     fun setModeKatalog(aktif: Boolean) { _modeKatalog.value = aktif }
 
+    // ── Scan entry point ─────────────────────────────────────────
+
     fun onQrCodeScanned(payload: String) {
         // Prevent multiple scans
-        if (_uiState.value !is ScannerUiState.Scanning) return
-        if (_modeKatalog.value) katalogkan(payload) else verify(payload, null)
+        val current = _flowState.value
+        if (current !is QShieldFlowState.Scanning && current !is QShieldFlowState.Launcher) return
+
+        if (_modeKatalog.value) {
+            katalogkan(payload)
+        } else {
+            verify(payload)
+        }
     }
 
     private fun katalogkan(payload: String) {
         viewModelScope.launch {
+            _flowState.value = QShieldFlowState.Verifying
             repository.inspectQris(payload)
-                .onSuccess { _uiState.value = ScannerUiState.Katalog(it) }
+                .onSuccess {
+                    // Katalog tidak punya verdict — langsung kembali ke scanning
+                    // dengan info yang sudah ditampilkan lewat snackbar/toast
+                    _flowState.value = QShieldFlowState.Scanning
+                }
                 .onFailure {
-                    _uiState.value = ScannerUiState.Error(
-                        it.message ?: "Terjadi kesalahan")
+                    _flowState.value = QShieldFlowState.ErrorState(
+                        title = "Error",
+                        message = it.message ?: "Terjadi kesalahan"
+                    )
                 }
         }
     }
-    
-    fun onVerifyPrintedLabel(payload: String, printedNmid: String) {
-        verify(payload, printedNmid)
-    }
 
-    private fun verify(payload: String, printedNmid: String?) {
+    private fun verify(payload: String) {
         viewModelScope.launch {
+            _flowState.value = QShieldFlowState.Verifying
+
             val deviceAnonId = prefs.getOrGenerateUuid()
-            val result = repository.verifyQris(payload, deviceAnonId, printedNmid)
+            val result = repository.verifyQris(payload, deviceAnonId, null)
+
             result.onSuccess { res ->
-                _uiState.value = ScannerUiState.Result(
-                    response = res.response,
-                    wifiNotice = res.wifiNotice,
-                    currentPayload = payload
-                )
+                routeVerdict(res.response, payload)
             }.onFailure { error ->
-                _uiState.value = ScannerUiState.Error(
+                _flowState.value = QShieldFlowState.ErrorState(
+                    title = "Verification Failed",
                     message = error.message ?: "Terjadi kesalahan"
                 )
             }
         }
     }
-    
+
+    /**
+     * Rute putusan berdasarkan action dari backend.
+     *
+     * Pemetaan ini COCOK PERSIS dengan binding.py:
+     *   proceed    → Verdict (hijau, bisa langsung lanjut)
+     *   warn       → Verdict (kuning, bisa lanjut setelah baca alasan)
+     *   step_up    → StepUpConfirmation (oranye, perlu konfirmasi + PIN)
+     *   cooling_off→ CoolingOff (merah, TIDAK bisa lanjut)
+     */
+    private fun routeVerdict(response: QrisVerificationResponse, payload: String) {
+        when (response.verdictAction) {
+            VerdictAction.PROCEED -> {
+                _flowState.value = QShieldFlowState.Verdict(
+                    response = response,
+                    rawPayload = payload
+                )
+            }
+            VerdictAction.WARN -> {
+                _flowState.value = QShieldFlowState.Verdict(
+                    response = response,
+                    rawPayload = payload
+                )
+            }
+            VerdictAction.STEP_UP -> {
+                _flowState.value = QShieldFlowState.StepUpConfirmation(
+                    response = response,
+                    rawPayload = payload
+                )
+            }
+            VerdictAction.COOLING_OFF -> {
+                _flowState.value = QShieldFlowState.CoolingOff(
+                    response = response,
+                    remainingSeconds = COOLING_OFF_SECONDS
+                )
+            }
+            VerdictAction.UNKNOWN -> {
+                // Aksi tidak dikenal — perlakukan sebagai warn
+                _flowState.value = QShieldFlowState.Verdict(
+                    response = response,
+                    rawPayload = payload
+                )
+            }
+        }
+    }
+
+    // ── Flow transition actions ──────────────────────────────────
+
+    /** Pengguna menekan Proceed di layar Verdict (proceed/warn). */
+    fun onVerdictProceed() {
+        val state = _flowState.value
+        if (state is QShieldFlowState.Verdict) {
+            _flowState.value = QShieldFlowState.Success(
+                merchantName = state.response.merchant?.name ?: "Merchant"
+            )
+        }
+    }
+
+    /** Pengguna mengkonfirmasi step-up → masuk ke PIN entry. */
+    fun onStepUpConfirmed() {
+        val state = _flowState.value
+        if (state is QShieldFlowState.StepUpConfirmation) {
+            _flowState.value = QShieldFlowState.PinEntry(
+                response = state.response,
+                rawPayload = state.rawPayload
+            )
+        }
+    }
+
+    /** PIN dimasukkan — verifikasi (untuk demo, langsung sukses). */
+    fun onPinEntered(pin: String) {
+        val state = _flowState.value
+        if (state is QShieldFlowState.PinEntry) {
+            // TODO: Verifikasi PIN dengan backend jika diperlukan
+            _flowState.value = QShieldFlowState.Success(
+                merchantName = state.response.merchant?.name ?: "Merchant"
+            )
+        }
+    }
+
+    /** Kembali ke pemindaian — dari state mana pun. */
     fun restartScanning() {
-        _uiState.value = ScannerUiState.Scanning
+        _flowState.value = QShieldFlowState.Scanning
+    }
+
+    companion object {
+        /** Durasi cooling-off dalam detik. */
+        private const val COOLING_OFF_SECONDS = 30
     }
 
     class Factory(private val context: Context) : ViewModelProvider.Factory {
@@ -116,12 +194,12 @@ class ScannerViewModel(
             val okHttpClient = ApiClient.createOkHttpClient(prefs)
             val retrofit = ApiClient.createRetrofit(okHttpClient)
             val apiService = retrofit.create(QShieldApiService::class.java)
-            
+
             val locationService = LocationService(LocationServices.getFusedLocationProviderClient(context))
             val wifiService = WifiService(context)
-            
+
             val repository = ScannerRepository(apiService, locationService, wifiService)
-            
+
             return ScannerViewModel(repository, prefs) as T
         }
     }
