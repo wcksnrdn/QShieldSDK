@@ -17,6 +17,7 @@ import id.qshield.scanner.data.network.QShieldApiService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -85,7 +86,11 @@ class ScannerViewModel(
             _flowState.value = QShieldFlowState.Verifying
 
             val deviceAnonId = prefs.getOrGenerateUuid()
-            val result = repository.verifyQris(payload, deviceAnonId, null)
+            // Dibaca sekali per pemindaian, bukan disimpan di ViewModel:
+            // pengguna bisa mengubahnya di dialog Setelan di tengah sesi,
+            // dan pemindaian berikutnya harus langsung memakai yang baru.
+            val sumber = prefs.sumberLokasiFlow.first()
+            val result = repository.verifyQris(payload, deviceAnonId, null, sumber)
 
             result.onSuccess { res ->
                 routeVerdict(res.response, payload)
