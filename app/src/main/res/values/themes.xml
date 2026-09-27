@@ -1,4 +1,18 @@
 <resources>
 
-    <style name="Theme.QShield" parent="Theme.MaterialComponents.Light" />
+    <!--
+        Tema XML dipakai SEBELUM Compose sempat menggambar apa pun.
+        Sebelumnya ia Theme.MaterialComponents.Light, sementara seluruh
+        aplikasi bertema gelap — akibatnya ada kilatan putih tiap kali
+        aplikasi dibuka, dan itu kesan pertama yang dilihat penguji.
+
+        NoActionBar karena seluruh layar digambar Compose; bilah judul
+        bawaan Android cuma memakan ruang dan tidak pernah dipakai.
+    -->
+    <style name="Theme.QShield" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="android:windowBackground">@color/latar_gelap</item>
+        <item name="android:statusBarColor">@color/latar_gelap</item>
+        <item name="android:navigationBarColor">@color/latar_gelap</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
 </resources>
